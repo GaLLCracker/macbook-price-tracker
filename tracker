@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import requests
+from bs4 import BeautifulSoup
+from datetime import datetime
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+import json
+import os
+
+# URL товара на CDEK.Shopping
+PRODUCT_URL = "https://cdek.shopping/p/37089048/noutbuk-apple-macbook-pro-14-2026-m5-max-64-gb2-tb-18-cpu40-gpu-nano-display-angl-klaviatura-silver"
+
+def get_price_from_cdek():
+    """Парсит цену с CDEK.Shopping"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        }
+        response = requests.get(PRODUCT_URL, headers=headers, timeout=15)
+        response.encoding = 'utf-8'
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Поиск цены - ищем текст с ₽
+        for element in soup.find_all(['span', 'div', 'p']):
+            text = element.get_text(strip=True)
+            if '₽' in text and any(char.isdigit() for char in text):
+                # Извлечение только цифр
+                price_str = ''.join(filter(str.isdigit, text))
+                if price_str:
+                    price = int(price_str)
+                    if price > 100000:  # MacBook не может быть дешевле 100k
+                        return price
+        
+        print("⚠️  Цена не найдена на странице")
+        return None
+    except Exception as e:
+        print(f"❌ Ошибка при парсинге: {e}")
+        return None
+
+def update_google_sheet(price):
+    """Добавляет цену в Google Sheets"""
+    try:
+        # Получаем credentials из переменной окружения
+        creds_json = os.getenv('GOOGLE_CREDS_JSON')
+        if not creds_json:
+            print("❌ Не найдены credentials. Установите переменную GOOGLE_CREDS_JSON")
+            return False
+        
+        creds_dict = json.loads(creds_json)
+        scope = ['https://spreadsheets.google.com/feeds',
+                 'https://www.googleapis.com/auth/drive']
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        client = gspread.authorize(creds)
+        
+        # ID вашей таблицы (скопируйте из URL Google Sheets)
+        SHEET_ID = "1htp2lKyr1fACVFrM7r5P6xCeIWmjoBos_WS1jlbaKrU"
+        sheet = client.open_by_key(SHEET_ID).worksheet("Лист1")
+        
+        # Получение текущей даты
+        today = datetime.now().strftime("%d.%m.%Y")
+        
+        # Добавление новой записи
+        sheet.append_row([today, price])
+        
+        print(f"✅ Цена обновлена: {price} ₽ ({today})")
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка при обновлении таблицы: {e}")
+        return False
+
+def main():
+    print("🔄 Запуск автоматического трекера цены MacBook Pro...")
+    price = get_price_from_cdek()
+    
+    if price:
+        print(f"💰 Текущая цена: {price} ₽")
+        update_google_sheet(price)
+    else:
+        print("❌ Не удалось получить цену")
+
+if __name__ == "__main__":
+    main()
